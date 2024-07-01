@@ -1,33 +1,33 @@
 #!/bin/bash
 
-# 定义脚本版本号
-SCRIPT_VERSION="1.0.0"
+# Define script version
+SCRIPT_VERSION="1.0.1"
 
-# 打印脚本版本号
-echo "Raspberry Pi OpenVPN 和 FRPC 安装脚本 - 版本 $SCRIPT_VERSION"
+# Print script version
+echo "Raspberry Pi OpenVPN and FRPC Installation Script - Version $SCRIPT_VERSION"
 
-# 确保脚本以 root 身份运行
+# Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then 
-  echo "请以 root 身份运行此脚本"
+  echo "Please run this script as root"
   exit
 fi
 
-# 获取设备 hostname 和机器码
+# Get device hostname and serial number
 HOSTNAME=$(hostname)
-MACHINE_ID=$(awk '/Serial/ {print $3}' /proc/cpuinfo)
+SERIAL_NUMBER=$(awk '/Serial/ {print $3}' /proc/cpuinfo)
 
-# 客户端配置文件名称
-CLIENT_CONF_NAME="${HOSTNAME}_${MACHINE_ID}.ovpn"
+# Client configuration file name
+CLIENT_CONF_NAME="${HOSTNAME}_${SERIAL_NUMBER}.ovpn"
 
-# 更新系统并安装所需的软件包
-echo "更新系统软件包..."
+# Update system and install required packages
+echo "Updating system packages..."
 apt update && apt upgrade -y
 
-# 安装 OpenVPN 和 EasyRSA
-echo "安装 OpenVPN 和 EasyRSA..."
+# Install OpenVPN and EasyRSA
+echo "Installing OpenVPN and EasyRSA..."
 apt install -y openvpn easy-rsa iptables-persistent
 
-# 设置 EasyRSA 目录并初始化
+# Set up EasyRSA directory and initialize
 EASYRSA_DIR=~/openvpn-ca
 mkdir -p $EASYRSA_DIR
 cd $EASYRSA_DIR
@@ -35,26 +35,26 @@ make-cadir .
 cd $EASYRSA_DIR
 ./easyrsa init-pki
 
-# 生成 CA
-echo "生成 CA 证书..."
+# Generate CA
+echo "Generating CA certificate..."
 ./easyrsa --batch build-ca nopass
 
-# 生成服务器证书和密钥
-echo "生成服务器证书和密钥..."
+# Generate server certificate and key
+echo "Generating server certificate and key..."
 ./easyrsa gen-req server nopass
 ./easyrsa --batch sign-req server server
 
-# 生成 Diffie-Hellman 参数
-echo "生成 Diffie-Hellman 参数..."
+# Generate Diffie-Hellman parameters
+echo "Generating Diffie-Hellman parameters..."
 ./easyrsa gen-dh
 
-# 生成客户端证书和密钥
-echo "生成客户端证书和密钥..."
+# Generate client certificate and key
+echo "Generating client certificate and key..."
 ./easyrsa gen-req client1 nopass
 ./easyrsa --batch sign-req client client1
 
-# 复制证书和密钥到 OpenVPN 目录
-echo "复制证书和密钥到 OpenVPN 目录..."
+# Copy certificates and keys to OpenVPN directory
+echo "Copying certificates and keys to OpenVPN directory..."
 cp $EASYRSA_DIR/pki/ca.crt /etc/openvpn/
 cp $EASYRSA_DIR/pki/issued/server.crt /etc/openvpn/
 cp $EASYRSA_DIR/pki/private/server.key /etc/openvpn/
@@ -62,8 +62,8 @@ cp $EASYRSA_DIR/pki/dh.pem /etc/openvpn/
 cp $EASYRSA_DIR/pki/issued/client1.crt /etc/openvpn/
 cp $EASYRSA_DIR/pki/private/client1.key /etc/openvpn/
 
-# 创建 OpenVPN 服务器配置文件
-echo "创建 OpenVPN 服务器配置文件..."
+# Create OpenVPN server configuration file
+echo "Creating OpenVPN server configuration file..."
 cat > /etc/openvpn/server.conf <<EOF
 port 1194
 proto udp
@@ -88,30 +88,35 @@ log-append /var/log/openvpn.log
 verb 3
 EOF
 
-# 启动并启用 OpenVPN 服务
-echo "启动并启用 OpenVPN 服务..."
+# Start and enable OpenVPN service
+echo "Starting and enabling OpenVPN service..."
 systemctl start openvpn@server
 systemctl enable openvpn@server
 systemctl status openvpn@server --no-pager
 
-# 启用 IP 转发
-echo "启用 IP 转发..."
+# Enable IP forwarding
+echo "Enabling IP forwarding..."
 echo 1 > /proc/sys/net/ipv4/ip_forward
 sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
 
-# 配置 NAT
-echo "配置 NAT..."
+# Configure NAT
+echo "Configuring NAT..."
 iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
 netfilter-persistent save
 netfilter-persistent reload
 
-# 创建客户端配置文件
-echo "创建 OpenVPN 客户端配置文件..."
+# Prompt user for FRPS server IP, token, and remote port
+read -p "Enter the FRPS server IP: " FRPS_SERVER_IP
+read -p "Enter the FRPS token: " FRPS_TOKEN
+read -p "Enter the remote port for FRPC to connect: " FRPC_REMOTE_PORT
+
+# Create client configuration file
+echo "Creating OpenVPN client configuration file..."
 cat > ~/$CLIENT_CONF_NAME <<EOF
 client
 dev tun
 proto udp
-remote <FRPS-服务器-IP> 6000
+remote $FRPS_SERVER_IP $FRPC_REMOTE_PORT
 resolv-retry infinite
 nobind
 persist-key
@@ -141,29 +146,29 @@ $(cat /etc/openvpn/client1.key)
 </key>
 EOF
 
-# 下载并安装 FRPC
-echo "下载并安装 FRPC..."
+# Download and install FRPC
+echo "Downloading and installing FRPC..."
 wget https://github.com/fatedier/frp/releases/download/v0.37.1/frp_0.37.1_linux_arm.tar.gz -O ~/frp_0.37.1_linux_arm.tar.gz
 tar -zxvf ~/frp_0.37.1_linux_arm.tar.gz -C ~/
 mkdir -p ~/frp_0.37.1_linux_arm
 
-# 配置 FRPC
-echo "配置 FRPC..."
+# Configure FRPC
+echo "Configuring FRPC..."
 cat > ~/frp_0.37.1_linux_arm/frpc.ini <<EOF
 [common]
-server_addr = <FRPS-服务器-IP>
+server_addr = $FRPS_SERVER_IP
 server_port = 7000
-token = <FRPS-服务器-验证密码>
+token = $FRPS_TOKEN
 
 [openvpn]
 type = tcp
 local_ip = 127.0.0.1
 local_port = 1194
-remote_port = 6000
+remote_port = $FRPC_REMOTE_PORT
 EOF
 
-# 创建并启用 FRPC 服务
-echo "创建并启用 FRPC 服务..."
+# Create and enable FRPC service
+echo "Creating and enabling FRPC service..."
 cat > /etc/systemd/system/frpc.service <<EOF
 [Unit]
 Description=FRPC Client
@@ -181,20 +186,16 @@ systemctl enable frpc
 systemctl start frpc
 systemctl status frpc --no-pager
 
-# 生成客户端配置文件下载链接
-echo "生成 OpenVPN 客户端配置文件下载链接..."
+# Generate client configuration file download link
+echo "Generating OpenVPN client configuration file download link..."
 cp ~/$CLIENT_CONF_NAME ~/Desktop/$CLIENT_CONF_NAME
-echo "客户端配置文件已生成并保存到桌面：~/Desktop/$CLIENT_CONF_NAME"
+echo "Client configuration file has been generated and saved to the desktop: ~/Desktop/$CLIENT_CONF_NAME"
 
-echo "所有步骤已完成！"
+echo "To download the client configuration file to your local machine, use the following command:"
+echo "scp $(whoami)@$(hostname -I | awk '{print $1}'):/home/$(whoami)/Desktop/$CLIENT_CONF_NAME ~/Desktop/"
 
-# 提供下载链接（假设 SSH 使用的是 SCP）
-SSH_USER=$(whoami)
-echo "要将客户端配置文件下载到本地，请使用以下命令："
-echo "scp $SSH_USER@<Raspberry Pi IP>:~/Desktop/$CLIENT_CONF_NAME ~/Desktop/"
+echo "Installation and configuration complete. Script version: $SCRIPT_VERSION"
 
-echo "安装和配置完成，脚本版本：$SCRIPT_VERSION"
-
-# 等待用户按任意键退出
-echo -n "按任意键退出..."
+# Wait for user to press any key to exit
+echo -n "Press any key to exit..."
 read -n 1 -s
