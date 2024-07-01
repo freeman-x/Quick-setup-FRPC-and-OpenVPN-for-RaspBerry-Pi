@@ -16,13 +16,16 @@
 
 ### 如何使用此脚本
 
-1. 确保您已将 Ubuntu 22 安装到您的 Raspberry Pi 3B 上，可以使用 Raspberry Pi Imager 工具完成此操作。
+1. 在 Raspberry Pi 上打开终端。
 
-2. 下载并运行此脚本。由于脚本涉及系统设置更改，请确保以 root 身份运行：
+2. 运行以下命令下载并运行脚本：
 
    ```bash
-   sudo bash setup_openvpn_frpc.sh
-   ```
+   sudo apt-get update && sudo apt-get install -y curl
+   curl -O https://raw.githubusercontent.com/username/repo/main/setup_openvpn_frpc.sh
+   chmod +x setup_openvpn_frpc.sh
+   sudo ./setup_openvpn_frpc.sh
+
 
 3. 脚本将自动完成所有步骤，包括安装所需软件包、配置 OpenVPN 服务器和 FRPC 客户端、生成客户端配置文件以及设置开机自启动。
 
