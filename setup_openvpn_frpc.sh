@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define script version
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.3"
 
 # Print script version
 echo "Raspberry Pi OpenVPN and FRPC Installation Script - Version $SCRIPT_VERSION"
@@ -19,39 +19,78 @@ SERIAL_NUMBER=$(awk '/Serial/ {print $3}' /proc/cpuinfo)
 # Client configuration file name
 CLIENT_CONF_NAME="${HOSTNAME}_${SERIAL_NUMBER}.ovpn"
 
+# Determine the country for optional sources list
+COUNTRY=$(curl -s ipinfo.io | jq -r .country)
+echo "Detected country: $COUNTRY"
+
+# Provide optional sources list
+if [ "$COUNTRY" == "CN" ]; then
+  echo "You are in China. It's recommended to use domestic sources for faster updates."
+  echo "1) Use default sources (international)"
+  echo "2) Use Tsinghua mirror"
+  echo "3) Use Aliyun mirror"
+  read -p "Select the sources list you want to use (1/2/3): " SOURCE_CHOICE
+
+  case $SOURCE_CHOICE in
+    2)
+      sed -i 's|http://ports.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
+      echo "Using Tsinghua mirror."
+      ;;
+    3)
+      sed -i 's|http://ports.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+      echo "Using Aliyun mirror."
+      ;;
+    *)
+      echo "Using default sources."
+      ;;
+  esac
+fi
+
 # Update system and install required packages
 echo "Updating system packages..."
-apt update && apt upgrade -y
+apt update > /dev/null && apt upgrade -y > /dev/null
+echo "System update complete."
 
 # Install OpenVPN and EasyRSA
 echo "Installing OpenVPN and EasyRSA..."
-apt install -y openvpn easy-rsa iptables-persistent
+apt install -y openvpn easy-rsa iptables-persistent > /dev/null
+echo "Installation complete."
 
 # Set up EasyRSA directory and initialize
 EASYRSA_DIR=~/openvpn-ca
 mkdir -p $EASYRSA_DIR
 cd $EASYRSA_DIR
-make-cadir .
+make-cadir . > /dev/null
 cd $EASYRSA_DIR
-./easyrsa init-pki
+./easyrsa init-pki > /dev/null
 
 # Generate CA
 echo "Generating CA certificate..."
-./easyrsa --batch build-ca nopass
+./easyrsa --batch build-ca nopass > /dev/null
 
 # Generate server certificate and key
 echo "Generating server certificate and key..."
-./easyrsa gen-req server nopass
-./easyrsa --batch sign-req server server
+./easyrsa gen-req server nopass > /dev/null
+./easyrsa --batch sign-req server server > /dev/null
 
 # Generate Diffie-Hellman parameters
 echo "Generating Diffie-Hellman parameters..."
-./easyrsa gen-dh
+./easyrsa gen-dh > /dev/null
 
 # Generate client certificate and key
 echo "Generating client certificate and key..."
-./easyrsa gen-req client1 nopass
-./easyrsa --batch sign-req client client1
+./easyrsa gen-req client1 nopass > /dev/null
+./easyrsa --batch sign-req client client1 > /dev/null
+
+# Check if the certificates were generated successfully
+if [ ! -f "$EASYRSA_DIR/pki/issued/client1.crt" ]; then
+  echo "Error: client1.crt not found."
+  exit 1
+fi
+if [ ! -f "$EASYRSA_DIR/pki/private/client1.key" ]; then
+  echo "Error: client1.key not found."
+  exit 1
+fi
 
 # Copy certificates and keys to OpenVPN directory
 echo "Copying certificates and keys to OpenVPN directory..."
@@ -105,10 +144,11 @@ iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
 netfilter-persistent save
 netfilter-persistent reload
 
-# Prompt user for FRPS server IP, token, and remote port
+# Prompt user for FRPS server IP, token, and remote port with default value 6000
 read -p "Enter the FRPS server IP: " FRPS_SERVER_IP
 read -p "Enter the FRPS token: " FRPS_TOKEN
-read -p "Enter the remote port for FRPC to connect: " FRPC_REMOTE_PORT
+read -p "Enter the remote port for FRPC to connect (default is 6000): " FRPC_REMOTE_PORT
+FRPC_REMOTE_PORT=${FRPC_REMOTE_PORT:-6000}
 
 # Create client configuration file
 echo "Creating OpenVPN client configuration file..."
