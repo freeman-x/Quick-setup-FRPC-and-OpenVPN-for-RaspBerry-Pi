@@ -1,10 +1,23 @@
 #!/bin/bash
 
+# 定义脚本版本号
+SCRIPT_VERSION="1.0.0"
+
+# 打印脚本版本号
+echo "Raspberry Pi OpenVPN 和 FRPC 安装脚本 - 版本 $SCRIPT_VERSION"
+
 # 确保脚本以 root 身份运行
 if [ "$EUID" -ne 0 ]; then 
   echo "请以 root 身份运行此脚本"
   exit
 fi
+
+# 获取设备 hostname 和机器码
+HOSTNAME=$(hostname)
+MACHINE_ID=$(awk '/Serial/ {print $3}' /proc/cpuinfo)
+
+# 客户端配置文件名称
+CLIENT_CONF_NAME="${HOSTNAME}_${MACHINE_ID}.ovpn"
 
 # 更新系统并安装所需的软件包
 echo "更新系统软件包..."
@@ -79,7 +92,7 @@ EOF
 echo "启动并启用 OpenVPN 服务..."
 systemctl start openvpn@server
 systemctl enable openvpn@server
-systemctl status openvpn@server
+systemctl status openvpn@server --no-pager
 
 # 启用 IP 转发
 echo "启用 IP 转发..."
@@ -94,7 +107,7 @@ netfilter-persistent reload
 
 # 创建客户端配置文件
 echo "创建 OpenVPN 客户端配置文件..."
-cat > ~/client1.ovpn <<EOF
+cat > ~/$CLIENT_CONF_NAME <<EOF
 client
 dev tun
 proto udp
@@ -128,7 +141,7 @@ $(cat /etc/openvpn/client1.key)
 </key>
 EOF
 
-# 下载和安装 FRPC
+# 下载并安装 FRPC
 echo "下载并安装 FRPC..."
 wget https://github.com/fatedier/frp/releases/download/v0.37.1/frp_0.37.1_linux_arm.tar.gz -O ~/frp_0.37.1_linux_arm.tar.gz
 tar -zxvf ~/frp_0.37.1_linux_arm.tar.gz -C ~/
@@ -166,11 +179,22 @@ EOF
 
 systemctl enable frpc
 systemctl start frpc
-systemctl status frpc
+systemctl status frpc --no-pager
 
 # 生成客户端配置文件下载链接
 echo "生成 OpenVPN 客户端配置文件下载链接..."
-cp ~/client1.ovpn ~/Desktop/client1.ovpn
-echo "客户端配置文件已生成并保存到桌面：~/Desktop/client1.ovpn"
+cp ~/$CLIENT_CONF_NAME ~/Desktop/$CLIENT_CONF_NAME
+echo "客户端配置文件已生成并保存到桌面：~/Desktop/$CLIENT_CONF_NAME"
 
 echo "所有步骤已完成！"
+
+# 提供下载链接（假设 SSH 使用的是 SCP）
+SSH_USER=$(whoami)
+echo "要将客户端配置文件下载到本地，请使用以下命令："
+echo "scp $SSH_USER@<Raspberry Pi IP>:~/Desktop/$CLIENT_CONF_NAME ~/Desktop/"
+
+echo "安装和配置完成，脚本版本：$SCRIPT_VERSION"
+
+# 等待用户按任意键退出
+echo -n "按任意键退出..."
+read -n 1 -s
