@@ -18,88 +18,119 @@ SERIAL_NUMBER=$(awk '/Serial/ {print $3}' /proc/cpuinfo)
 
 # Client configuration file name
 CLIENT_CONF_NAME="${HOSTNAME}_${SERIAL_NUMBER}.ovpn"
+CERT_INFO_FILE=~/openvpn_cert_info.txt
 
-# Determine the country for optional sources list
-COUNTRY=$(curl -s ipinfo.io | jq -r .country)
-echo "Detected country: $COUNTRY"
+# Define directories and files
+EASYRSA_DIR=~/openvpn-ca
+FRPC_DIR=~/frp_0.37.1_linux_arm
+CLIENT_OVPN_FILE=~/$CLIENT_CONF_NAME
+EASYRSA_FILES="$EASYRSA_DIR/pki/ca.crt /etc/openvpn/server.crt /etc/openvpn/server.key /etc/openvpn/dh.pem /etc/openvpn/client1.crt /etc/openvpn/client1.key"
 
-# Provide optional sources list
-if [ "$COUNTRY" == "CN" ]; then
-  echo "You are in China. It's recommended to use domestic sources for faster updates."
-  echo "1) Use default sources (international)"
-  echo "2) Use Tsinghua mirror"
-  echo "3) Use Aliyun mirror"
-  read -p "Select the sources list you want to use (1/2/3): " SOURCE_CHOICE
+# Generate random passphrase and Common Name
+generate_passphrase() {
+  openssl rand -base64 32
+}
 
-  case $SOURCE_CHOICE in
-    2)
-      sed -i 's|http://ports.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
-      echo "Using Tsinghua mirror."
-      ;;
-    3)
-      sed -i 's|http://ports.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-      echo "Using Aliyun mirror."
-      ;;
-    *)
-      echo "Using default sources."
-      ;;
-  esac
-fi
+generate_common_name() {
+  RANDOM_SUFFIX=$(openssl rand -hex 4)
+  echo "${HOSTNAME}_${RANDOM_SUFFIX}"
+}
+
+# Function to clear existing OpenVPN, EasyRSA, and FRPC configurations
+clear_all() {
+  echo "Clearing all existing OpenVPN, EasyRSA, and FRPC configurations..."
+  systemctl stop openvpn@server
+  systemctl disable openvpn@server
+  systemctl stop frpc
+  systemctl disable frpc
+  rm -rf $EASYRSA_DIR /etc/openvpn/* $FRPC_DIR /etc/systemd/system/frpc.service $CLIENT_OVPN_FILE
+  echo "Cleared all configurations."
+}
+
+# Function to check and prompt for existing services
+check_existing_services() {
+  if [ -d "$EASYRSA_DIR" ] || [ -d "$FRPC_DIR" ] || [ -f "/etc/openvpn/server.conf" ]; then
+    echo "Existing configurations detected."
+    echo "1) Clear all existing configurations and reinstall"
+    echo "2) Update existing configurations"
+    read -p "Select an option (1/2): " USER_CHOICE
+
+    case $USER_CHOICE in
+      1)
+        clear_all
+        ;;
+      2)
+        echo "Updating existing configurations..."
+        ;;
+      *)
+        echo "Invalid option. Exiting."
+        exit 1
+        ;;
+    esac
+  fi
+}
 
 # Update system and install required packages
 echo "Updating system packages..."
-apt update > /dev/null && apt upgrade -y > /dev/null
+apt update -qq > /dev/null && apt upgrade -y -qq > /dev/null
 echo "System update complete."
+
+# Check and prompt for existing services
+check_existing_services
 
 # Install OpenVPN and EasyRSA
 echo "Installing OpenVPN and EasyRSA..."
-apt install -y openvpn easy-rsa iptables-persistent > /dev/null
+apt install -y openvpn easy-rsa iptables-persistent -qq
 echo "Installation complete."
 
 # Set up EasyRSA directory and initialize
-EASYRSA_DIR=~/openvpn-ca
 mkdir -p $EASYRSA_DIR
-cd $EASYRSA_DIR
-make-cadir . > /dev/null
-cd $EASYRSA_DIR
-./easyrsa init-pki > /dev/null
+make-cadir $EASYRSA_DIR > /dev/null
+$EASYRSA_DIR/easyrsa init-pki > /dev/null
 
 # Generate CA
+PASS=$(generate_passphrase)
+COMMON_NAME=$(generate_common_name)
+echo "Common Name: $COMMON_NAME" > $CERT_INFO_FILE
+echo "Passphrase: $PASS" >> $CERT_INFO_FILE
+
 echo "Generating CA certificate..."
-./easyrsa --batch build-ca nopass > /dev/null
+echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa --batch build-ca nopass > /dev/null
 
 # Generate server certificate and key
 echo "Generating server certificate and key..."
-./easyrsa gen-req server nopass > /dev/null
-./easyrsa --batch sign-req server server > /dev/null
+echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa gen-req $COMMON_NAME nopass > /dev/null
+echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa --batch sign-req server $COMMON_NAME > /dev/null
 
 # Generate Diffie-Hellman parameters
 echo "Generating Diffie-Hellman parameters..."
-./easyrsa gen-dh > /dev/null
+$EASYRSA_DIR/easyrsa gen-dh > /dev/null
 
 # Generate client certificate and key
 echo "Generating client certificate and key..."
-./easyrsa gen-req client1 nopass > /dev/null
-./easyrsa --batch sign-req client client1 > /dev/null
+CLIENT_COMMON_NAME=$(generate_common_name)
+echo "Client Common Name: $CLIENT_COMMON_NAME" >> $CERT_INFO_FILE
+echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa gen-req $CLIENT_COMMON_NAME nopass > /dev/null
+echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa --batch sign-req client $CLIENT_COMMON_NAME > /dev/null
 
 # Check if the certificates were generated successfully
-if [ ! -f "$EASYRSA_DIR/pki/issued/client1.crt" ]; then
-  echo "Error: client1.crt not found."
+if [ ! -f "$EASYRSA_DIR/pki/issued/$CLIENT_COMMON_NAME.crt" ]; then
+  echo "Error: $CLIENT_COMMON_NAME.crt not found."
   exit 1
 fi
-if [ ! -f "$EASYRSA_DIR/pki/private/client1.key" ]; then
-  echo "Error: client1.key not found."
+if [ ! -f "$EASYRSA_DIR/pki/private/$CLIENT_COMMON_NAME.key" ]; then
+  echo "Error: $CLIENT_COMMON_NAME.key not found."
   exit 1
 fi
 
 # Copy certificates and keys to OpenVPN directory
 echo "Copying certificates and keys to OpenVPN directory..."
 cp $EASYRSA_DIR/pki/ca.crt /etc/openvpn/
-cp $EASYRSA_DIR/pki/issued/server.crt /etc/openvpn/
-cp $EASYRSA_DIR/pki/private/server.key /etc/openvpn/
+cp $EASYRSA_DIR/pki/issued/$COMMON_NAME.crt /etc/openvpn/server.crt
+cp $EASYRSA_DIR/pki/private/$COMMON_NAME.key /etc/openvpn/server.key
 cp $EASYRSA_DIR/pki/dh.pem /etc/openvpn/
-cp $EASYRSA_DIR/pki/issued/client1.crt /etc/openvpn/
-cp $EASYRSA_DIR/pki/private/client1.key /etc/openvpn/
+cp $EASYRSA_DIR/pki/issued/$CLIENT_COMMON_NAME.crt /etc/openvpn/client1.crt
+cp $EASYRSA_DIR/pki/private/$CLIENT_COMMON_NAME.key /etc/openvpn/client1.key
 
 # Create OpenVPN server configuration file
 echo "Creating OpenVPN server configuration file..."
@@ -152,7 +183,7 @@ FRPC_REMOTE_PORT=${FRPC_REMOTE_PORT:-6000}
 
 # Create client configuration file
 echo "Creating OpenVPN client configuration file..."
-cat > ~/$CLIENT_CONF_NAME <<EOF
+cat > $CLIENT_OVPN_FILE <<EOF
 client
 dev tun
 proto udp
@@ -190,11 +221,11 @@ EOF
 echo "Downloading and installing FRPC..."
 wget https://github.com/fatedier/frp/releases/download/v0.37.1/frp_0.37.1_linux_arm.tar.gz -O ~/frp_0.37.1_linux_arm.tar.gz
 tar -zxvf ~/frp_0.37.1_linux_arm.tar.gz -C ~/
-mkdir -p ~/frp_0.37.1_linux_arm
+mkdir -p $FRPC_DIR
 
 # Configure FRPC
 echo "Configuring FRPC..."
-cat > ~/frp_0.37.1_linux_arm/frpc.ini <<EOF
+cat > $FRPC_DIR/frpc.ini <<EOF
 [common]
 server_addr = $FRPS_SERVER_IP
 server_port = 7000
@@ -215,7 +246,7 @@ Description=FRPC Client
 After=network.target
 
 [Service]
-ExecStart=/home/ubuntu/frp_0.37.1_linux_arm/frpc -c /home/ubuntu/frp_0.37.1_linux_arm/frpc.ini
+ExecStart=$FRPC_DIR/frpc -c $FRPC_DIR/frpc.ini
 Restart=always
 
 [Install]
@@ -226,16 +257,8 @@ systemctl enable frpc
 systemctl start frpc
 systemctl status frpc --no-pager
 
-# Generate client configuration file download link
-echo "Generating OpenVPN client configuration file download link..."
-cp ~/$CLIENT_CONF_NAME ~/Desktop/$CLIENT_CONF_NAME
-echo "Client configuration file has been generated and saved to the desktop: ~/Desktop/$CLIENT_CONF_NAME"
+# Display the path to the client configuration file
+echo "The OpenVPN client configuration file has been generated and saved at: $CLIENT_OVPN_FILE"
 
-echo "To download the client configuration file to your local machine, use the following command:"
-echo "scp $(whoami)@$(hostname -I | awk '{print $1}'):/home/$(whoami)/Desktop/$CLIENT_CONF_NAME ~/Desktop/"
-
-echo "Installation and configuration complete. Script version: $SCRIPT_VERSION"
-
-# Wait for user to press any key to exit
-echo -n "Press any key to exit..."
-read -n 1 -s
+# Finish script
+read -p "Press any key to exit..." -n 1 -s
