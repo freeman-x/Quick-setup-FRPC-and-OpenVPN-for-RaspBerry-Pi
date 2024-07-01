@@ -22,7 +22,7 @@
 
    ```bash
    sudo apt-get update && sudo apt-get install -y curl
-   curl -O https://github.com/freeman-x/Quick_setup_openvpn-frpc/blob/main/setup_openvpn_frpc.sh
+   curl -O https://raw.githubusercontent.com/freeman-x/Quick_setup_openvpn-frpc/main/setup_openvpn_frpc.sh
    chmod +x setup_openvpn_frpc.sh
    sudo ./setup_openvpn_frpc.sh
 
