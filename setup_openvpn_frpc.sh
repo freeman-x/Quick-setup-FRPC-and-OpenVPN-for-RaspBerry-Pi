@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.0.5"
+SCRIPT_VERSION="1.0.6"
 
 echo "Raspberry Pi OpenVPN and FRPC Installation Script - Version $SCRIPT_VERSION"
 
@@ -128,6 +128,7 @@ port 1194
 proto tcp
 # 使用 TUN 设备（虚拟隧道接口）
 dev tun
+
 # CA 证书路径
 ca ca.crt
 # 服务器证书路径
@@ -136,16 +137,25 @@ cert server.crt
 key server.key
 # Diffie-Hellman 参数路径
 dh dh.pem
+
 # 分配给 VPN 客户端的 IP 地址范围和子网掩码
 server 10.8.0.0 255.255.255.0
 # 保持客户端 IP 地址的持久化
 ifconfig-pool-persist ipp.txt
+
 # 将所有客户端流量重定向到 VPN
 push "redirect-gateway def1 bypass-dhcp"
+
 # 向客户端推送 DNS 服务器
 push "dhcp-option DNS 8.8.8.8"
 # 另一个 DNS 服务器
 push "dhcp-option DNS 8.8.4.4"
+
+# 启用客户端到客户端的通信
+client-to-client
+
+push "route 10.8.0.0 255.255.255.0"
+
 # 保持连接：每 10 秒发送一个 ping，120 秒无响应即断开
 keepalive 10 120
 # 使用 AES-256-CBC 加密算法
@@ -158,12 +168,12 @@ group nogroup
 persist-key
 # 保持隧道设备，即使重新启动也保持不变
 persist-tun
-# 将状态日志写入文件
-status openvpn-status.log
-# 将日志追加写入文件
+
+# 日志配置
+status /var/log/openvpn-status.log
 log-append /var/log/openvpn.log
-# 日志详细级别（1-5），3 表示中等详细
 verb 3
+
 EOF
 
 # 启动并启用 OpenVPN 服务
@@ -212,15 +222,11 @@ persist-tun
 remote-cert-tls server
 # 使用 AES-256-CBC 加密算法
 cipher AES-256-CBC
-# 启用 LZO 压缩
-comp-lzo
 # 日志详细级别（1-5），3 表示中等详细
 verb 3
 # 将所有流量重定向到 VPN
 redirect-gateway def1
-# 使用 Google 的 DNS 服务器
 dhcp-option DNS 8.8.8.8
-# 另一个 Google 的 DNS 服务器
 dhcp-option DNS 8.8.4.4
 
 # CA 证书开始
@@ -311,7 +317,7 @@ systemctl enable frpc
 systemctl status frpc --no-pager
 
 # 打印客户端配置文件路径
-echo "OpenVPN client configuration file created at: $CLIENT_OVPN_FILE"
+echo "OpenVPN client configuration file created at: $CLIENT_OVPN_FILE "
 echo "FRPC configuration file created at: /etc/frpc.ini"
 echo "Script execution complete."
 
