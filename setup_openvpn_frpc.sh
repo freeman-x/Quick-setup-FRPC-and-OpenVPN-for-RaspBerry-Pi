@@ -381,12 +381,12 @@ CLIENT_DOWNLOAD_URL="http://$(hostname -I | awk '{print $1}'):8000/$CLIENT_CONF_
 
 # 打印生成的密码信息
 echo -e "\n\033[1;32mOpenVPN 客户端连接信息：\033[0m"
-echo -e "\033[1;34m用户名: \033[0mopenvpn"
-echo -e "\033[1;34m密码: \033[0m$VPN_PASSWORD"
+echo -e "用户名: \033[1;34mopenvpn\033[0m"
+echo -e "密码: \033[1;34m$VPN_PASSWORD\033[0m"
 
 # 打印客户端配置文件路径和下载链接
 echo "OpenVPN 客户端配置文件路径：$CLIENT_OVPN_FILE"
-echo -e "\033[1;34m下载链接: $CLIENT_DOWNLOAD_URL\033[0m"
+echo -e "下载链接: \033[1;34m$CLIENT_DOWNLOAD_URL\033[0m"
 
 # 提示用户按任意键退出并停止 HTTP 服务器
 read -p "按任意键退出并停止 HTTP 服务器..." -n 1 -s
