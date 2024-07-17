@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Script version
-SCRIPT_VERSION="1.1.3"
+SCRIPT_VERSION="1.2.1"
 
 echo "Multi-Platform OpenVPN and FRPC Installation Script - Version $SCRIPT_VERSION"
 
 # Ensure the script is run as root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
   echo "Please run this script as root"
   exit 1
 fi
@@ -40,28 +40,12 @@ if [ -z "$USER_HOME" ]; then
   exit 1
 fi
 
-# Device hostname and serial number
+# Device hostname
 HOSTNAME=$(hostname)
-SERIAL_NUMBER=$(awk '/Serial/ {print $3}' /proc/cpuinfo 2>/dev/null || echo "N/A")
-
-# Configuration file name
-CLIENT_CONF_NAME="${HOSTNAME}_${SERIAL_NUMBER}.ovpn"
-CERT_INFO_FILE="$USER_HOME/openvpn_cert_info.txt"
-
-# Directories and files
-EASYRSA_DIR="$USER_HOME/openvpn-ca"
-FRPC_DIR="$USER_HOME/frp"
-CLIENT_OVPN_FILE="$USER_HOME/$CLIENT_CONF_NAME"
 
 # Function to generate a random passphrase (16 characters)
 generate_passphrase() {
   head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16 ; echo ''
-}
-
-# Function to generate a common name
-generate_common_name() {
-  RANDOM_SUFFIX=$(openssl rand -hex 4)
-  echo "${HOSTNAME}_${RANDOM_SUFFIX}"
 }
 
 # Collect FRPS server information from user
@@ -80,9 +64,20 @@ done
 read -p "Enter the FRPC remote port (default is 6000): " FRPC_REMOTE_PORT
 FRPC_REMOTE_PORT=${FRPC_REMOTE_PORT:-6000}
 
+# Ask for protocol type
+read -p "Enter the protocol type (tcp/udp, default is tcp): " FRPC_PROTOCOL
+FRPC_PROTOCOL=${FRPC_PROTOCOL:-tcp}
+if [[ "$FRPC_PROTOCOL" != "tcp" && "$FRPC_PROTOCOL" != "udp" ]]; then
+  echo "Invalid protocol type. Defaulting to tcp."
+  FRPC_PROTOCOL="tcp"
+fi
+
 # Generate random VPN password
 VPN_PASSWORD=$(generate_passphrase)
-VPN_USER="openvpn"
+
+# Configuration file name
+CLIENT_CONF_NAME="${HOSTNAME}_${VPN_PASSWORD}.ovpn"
+CLIENT_OVPN_FILE="$USER_HOME/$CLIENT_CONF_NAME"
 
 # Clear all existing OpenVPN, EasyRSA, and FRPC configurations
 echo "Clearing all existing OpenVPN, EasyRSA, and FRPC configurations..."
@@ -90,7 +85,7 @@ systemctl stop openvpn@server
 systemctl disable openvpn@server
 systemctl stop frpc
 systemctl disable frpc
-rm -rf $EASYRSA_DIR /etc/openvpn/* $FRPC_DIR /etc/systemd/system/frpc.service $CLIENT_OVPN_FILE
+rm -rf $USER_HOME/openvpn-ca /etc/openvpn/* $USER_HOME/frp /etc/systemd/system/frpc.service $CLIENT_OVPN_FILE
 echo "Cleared all configurations."
 
 # Update system and install required packages
@@ -101,62 +96,53 @@ echo "System update complete."
 
 # Install EasyRSA
 echo "Setting up EasyRSA..."
-mkdir -p $EASYRSA_DIR
-cp -r /usr/share/easy-rsa/* $EASYRSA_DIR
+mkdir -p $USER_HOME/openvpn-ca
+cp -r /usr/share/easy-rsa/* $USER_HOME/openvpn-ca
 
 # Initialize EasyRSA PKI
-cd $EASYRSA_DIR
+cd $USER_HOME/openvpn-ca
 ./easyrsa init-pki
-
-# Check if EasyRSA exists and is executable
-if [ ! -x "$EASYRSA_DIR/easyrsa" ]; then
-  echo "Error: EasyRSA not found or not executable at $EASYRSA_DIR/easyrsa."
-  exit 1
-fi
 
 # Generate CA certificate
 PASS=$(generate_passphrase)
-COMMON_NAME=$(generate_common_name)
-echo "Common Name: $COMMON_NAME" > $CERT_INFO_FILE
-echo "Passphrase: $PASS" >> $CERT_INFO_FILE
+COMMON_NAME="${HOSTNAME}_$(openssl rand -hex 4)"
 
 echo "Generating CA certificate..."
-echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa --batch build-ca nopass > /dev/null
+echo -e "$PASS\n$PASS" | $USER_HOME/openvpn-ca/easyrsa --batch build-ca nopass > /dev/null
 
 # Generate server certificate and key
 echo "Generating server certificate and key..."
-echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa gen-req $COMMON_NAME nopass > /dev/null
-echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa --batch sign-req server $COMMON_NAME > /dev/null
+echo -e "$PASS\n$PASS" | $USER_HOME/openvpn-ca/easyrsa gen-req $COMMON_NAME nopass > /dev/null
+echo -e "$PASS\n$PASS" | $USER_HOME/openvpn-ca/easyrsa --batch sign-req server $COMMON_NAME > /dev/null
 
 # Generate Diffie-Hellman parameters
 echo "Generating Diffie-Hellman parameters..."
-$EASYRSA_DIR/easyrsa gen-dh > /dev/null
+$USER_HOME/openvpn-ca/easyrsa gen-dh > /dev/null
 
 # Generate client certificate and key
+CLIENT_COMMON_NAME="${HOSTNAME}_$(openssl rand -hex 4)"
 echo "Generating client certificate and key..."
-CLIENT_COMMON_NAME=$(generate_common_name)
-echo "Client Common Name: $CLIENT_COMMON_NAME" >> $CERT_INFO_FILE
-echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa gen-req $CLIENT_COMMON_NAME nopass > /dev/null
-echo -e "$PASS\n$PASS" | $EASYRSA_DIR/easyrsa --batch sign-req client $CLIENT_COMMON_NAME > /dev/null
+echo -e "$PASS\n$PASS" | $USER_HOME/openvpn-ca/easyrsa gen-req $CLIENT_COMMON_NAME nopass > /dev/null
+echo -e "$PASS\n$PASS" | $USER_HOME/openvpn-ca/easyrsa --batch sign-req client $CLIENT_COMMON_NAME > /dev/null
 
 # Check if certificates are generated successfully
-if [ ! -f "$EASYRSA_DIR/pki/issued/$CLIENT_COMMON_NAME.crt" ]; then
+if [ ! -f "$USER_HOME/openvpn-ca/pki/issued/$CLIENT_COMMON_NAME.crt" ]; then
   echo "Error: $CLIENT_COMMON_NAME.crt not found."
   exit 1
 fi
-if [ ! -f "$EASYRSA_DIR/pki/private/$CLIENT_COMMON_NAME.key" ]; then
+if [ ! -f "$USER_HOME/openvpn-ca/pki/private/$CLIENT_COMMON_NAME.key" ]; then
   echo "Error: $CLIENT_COMMON_NAME.key not found."
   exit 1
 fi
 
 # Copy certificates and keys to OpenVPN directory
 echo "Copying certificates and keys to OpenVPN directory..."
-cp $EASYRSA_DIR/pki/ca.crt /etc/openvpn/
-cp $EASYRSA_DIR/pki/issued/$COMMON_NAME.crt /etc/openvpn/server.crt
-cp $EASYRSA_DIR/pki/private/$COMMON_NAME.key /etc/openvpn/server.key
-cp $EASYRSA_DIR/pki/dh.pem /etc/openvpn/
-cp $EASYRSA_DIR/pki/issued/$CLIENT_COMMON_NAME.crt /etc/openvpn/client1.crt
-cp $EASYRSA_DIR/pki/private/$CLIENT_COMMON_NAME.key /etc/openvpn/client1.key
+cp $USER_HOME/openvpn-ca/pki/ca.crt /etc/openvpn/
+cp $USER_HOME/openvpn-ca/pki/issued/$COMMON_NAME.crt /etc/openvpn/server.crt
+cp $USER_HOME/openvpn-ca/pki/private/$COMMON_NAME.key /etc/openvpn/server.key
+cp $USER_HOME/openvpn-ca/pki/dh.pem /etc/openvpn/
+cp $USER_HOME/openvpn-ca/pki/issued/$CLIENT_COMMON_NAME.crt /etc/openvpn/client1.crt
+cp $USER_HOME/openvpn-ca/pki/private/$CLIENT_COMMON_NAME.key /etc/openvpn/client1.key
 echo "Certificates and keys copied."
 
 # Create OpenVPN server configuration file
@@ -164,8 +150,8 @@ echo "Creating OpenVPN server configuration file..."
 cat > /etc/openvpn/server.conf <<EOF
 # Port that OpenVPN server will listen on
 port 1194
-# Use TCP protocol
-proto tcp
+# Use $FRPC_PROTOCOL protocol
+proto $FRPC_PROTOCOL
 # Use TUN device (virtual tunnel interface)
 dev tun
 
@@ -240,7 +226,7 @@ echo "Generating OpenVPN client configuration file..."
 cat > $CLIENT_OVPN_FILE <<EOF
 client
 dev tun
-proto tcp
+proto $FRPC_PROTOCOL
 remote $FRPS_SERVER_IP $FRPC_REMOTE_PORT
 resolv-retry infinite
 nobind
@@ -281,7 +267,7 @@ case "$ARCH" in
     ;;
 esac
 
-FRPC_VERSION="0.37.1"
+FRPC_VERSION="0.51.3"
 FRPC_DOWNLOAD_URL="https://github.com/fatedier/frp/releases/download/v$FRPC_VERSION/frp_${FRPC_VERSION}_${FRPC_ARCH}.tar.gz"
 FRPC_TAR_FILE="$USER_HOME/frp_${FRPC_VERSION}_${FRPC_ARCH}.tar.gz"
 FRPC_DIR="$USER_HOME/frp_${FRPC_VERSION}_${FRPC_ARCH}"
@@ -320,8 +306,8 @@ server_addr = $FRPS_SERVER_IP
 server_port = 7000
 token = $FRPS_TOKEN
 
-[OpenVPN]
-type = tcp
+[OpenVPN-$HOSTNAME]
+type = $FRPC_PROTOCOL
 local_ip = 127.0.0.1
 local_port = 1194
 remote_port = $FRPC_REMOTE_PORT
@@ -351,6 +337,18 @@ systemctl start frpc
 systemctl enable frpc
 systemctl status frpc --no-pager
 
+# Open OpenVPN port in firewall
+echo "Opening OpenVPN port in firewall..."
+if command -v ufw > /dev/null; then
+  ufw allow 1194/$FRPC_PROTOCOL
+  ufw reload
+elif command -v firewall-cmd > /dev/null; then
+  firewall-cmd --permanent --add-port=1194/$FRPC_PROTOCOL
+  firewall-cmd --reload
+else
+  echo "No compatible firewall management tool found. Please open port 1194 manually."
+fi
+
 # Function to start a simple HTTP server
 start_http_server() {
   local port=$1
@@ -379,15 +377,15 @@ start_http_server 8000
 # Generate download link for OpenVPN client configuration file
 CLIENT_DOWNLOAD_URL="http://$(hostname -I | awk '{print $1}'):8000/$CLIENT_CONF_NAME"
 
-# 打印生成的密码信息
-echo -e "\n\033[1;32mOpenVPN 客户端连接信息：\033[0m"
-echo -e "用户名: \033[1;34mopenvpn\033[0m"
-echo -e "密码: \033[1;34m$VPN_PASSWORD\033[0m"
+# Print generated password information
+echo -e "\n\033[1;32mOpenVPN client connection information:\033[0m"
+echo -e "Username: \033[1;34mopenvpn\033[0m"
+echo -e "Password: \033[1;34m$VPN_PASSWORD\033[0m"
 
-# 打印客户端配置文件路径和下载链接
-echo "OpenVPN 客户端配置文件路径：$CLIENT_OVPN_FILE"
-echo -e "下载链接: \033[1;34m$CLIENT_DOWNLOAD_URL\033[0m"
+# Print client configuration file path and download link
+echo "OpenVPN client configuration file path: $CLIENT_OVPN_FILE"
+echo -e "Download link: \033[1;34m$CLIENT_DOWNLOAD_URL\033[0m"
 
-# 提示用户按任意键退出并停止 HTTP 服务器
-read -p "按任意键退出并停止 HTTP 服务器..." -n 1 -s
+# Prompt user to press any key to exit and stop HTTP server
+read -p "Press any key to exit and stop HTTP server..." -n 1 -s
 stop_http_server
